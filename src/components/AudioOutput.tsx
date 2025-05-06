@@ -1,5 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { ipcRenderer } from 'electron';
+
+// Define the ElectronAPI interface locally for use with type assertions
+interface ElectronAPI {
+  platform: () => Promise<string>;
+  getAudioDevices: () => Promise<Array<{id: string, name: string, type: string}>>;
+  createVirtualMicrophone: () => Promise<{success: boolean, deviceId?: string, error?: string}>;
+  startAudioRouting: (options: {deviceId: string, outputType: 'microphone' | 'speaker'}) => Promise<{success: boolean, error?: string}>;
+  stopAudioRouting: () => Promise<{success: boolean, error?: string}>;
+}
+
+// Use this to access the electron API with type assertion
+const electronAPI = window.electron as ElectronAPI;
 
 interface AudioOutputProps {
   isActive: boolean;
@@ -25,7 +36,7 @@ const AudioOutput: React.FC<AudioOutputProps> = ({ isActive, setIsActive }) => {
 
   useEffect(() => {
     // Detect platform through Electron
-    window.electron.platform().then((plat: string) => {
+    electronAPI.platform().then((plat: string) => {
       setPlatform(plat);
     });
 
@@ -37,7 +48,7 @@ const AudioOutput: React.FC<AudioOutputProps> = ({ isActive, setIsActive }) => {
     try {
       setLoading(true);
       // In a real implementation, we would use Electron's ipcRenderer to get system devices
-      const devices = await window.electron.getAudioDevices();
+      const devices = await electronAPI.getAudioDevices();
       setAudioDevices(devices);
       setLoading(false);
     } catch (err) {
@@ -53,7 +64,7 @@ const AudioOutput: React.FC<AudioOutputProps> = ({ isActive, setIsActive }) => {
       setError(null);
       
       // Call platform-specific method to create virtual microphone
-      const result = await window.electron.createVirtualMicrophone();
+      const result = await electronAPI.createVirtualMicrophone();
       
       if (result.success) {
         setVirtualMicCreated(true);
@@ -79,11 +90,11 @@ const AudioOutput: React.FC<AudioOutputProps> = ({ isActive, setIsActive }) => {
     try {
       if (isActive) {
         // Stop routing audio
-        await window.electron.stopAudioRouting();
+        await electronAPI.stopAudioRouting();
         setIsActive(false);
       } else {
         // Start routing audio to selected device
-        const result = await window.electron.startAudioRouting({
+        const result = await electronAPI.startAudioRouting({
           deviceId: selectedDeviceId,
           outputType: outputType
         });

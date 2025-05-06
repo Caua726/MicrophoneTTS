@@ -1,6 +1,14 @@
 import React, { useState, useRef } from 'react';
 import OpenAI from 'openai';
 
+// Use the same ElectronAPI interface and type assertion if needed
+interface ElectronAPI {
+  saveAudio: (audioBuffer: any) => Promise<{success: boolean}>;
+}
+
+// Access the electron API with type assertion when needed
+const electronAPI = window.electron as ElectronAPI;
+
 interface TextToSpeechProps {
   apiKey: string;
   isOutputActive: boolean;
