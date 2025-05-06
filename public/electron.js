@@ -3,10 +3,12 @@ const path = require('path');
 const url = require('url');
 const { spawn, exec } = require('child_process');
 const os = require('os');
+const fs = require('fs');
 const isDev = process.env.NODE_ENV !== 'production';
 
 let mainWindow;
 let activeAudioProcess = null;
+let activePactlModules = [];
 
 function createWindow() {
   // Create the browser window.
@@ -17,8 +19,11 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       enableRemoteModule: false,
-      preload: path.join(__dirname, 'preload.js')
-    }
+      preload: path.join(__dirname, 'preload.js'),
+      devTools: isDev // Only enable DevTools in development mode
+    },
+    autoHideMenuBar: true, // Hide the menu bar
+    frame: false // Remove window frame (including title bar)
   });
 
   // Set Content Security Policy - but only in production
@@ -47,10 +52,12 @@ function createWindow() {
 
   mainWindow.loadURL(startUrl);
 
-  // Open DevTools in development mode
-  if (isDev) {
-    mainWindow.webContents.openDevTools();
-  }
+  // Disable DevTools opening
+  mainWindow.webContents.on('devtools-opened', () => {
+    if (!isDev) {
+      mainWindow.webContents.closeDevTools();
+    }
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -74,6 +81,7 @@ app.on('activate', () => {
 app.on('before-quit', () => {
   // Clean up any virtual devices or processes when the app quits
   cleanupAudioRouting();
+  unloadPactlModules();
 });
 
 // Helper to get platform
@@ -81,10 +89,37 @@ ipcMain.handle('get-platform', async () => {
   return process.platform;
 });
 
+// Check if a command is available
+async function isCommandAvailable(command) {
+  return new Promise((resolve) => {
+    if (process.platform === 'win32') {
+      exec(`where ${command}`, (error) => {
+        resolve(!error);
+      });
+    } else {
+      exec(`which ${command}`, (error) => {
+        resolve(!error);
+      });
+    }
+  });
+}
+
 // Get a list of audio devices on the system
 ipcMain.handle('get-audio-devices', async () => {
-  // In a real implementation, you'd use native APIs to detect actual devices
-  // This is a simplified mock implementation
+  if (process.platform === 'linux') {
+    try {
+      // Try to get real PulseAudio devices
+      const hasPactl = await isCommandAvailable('pactl');
+      
+      if (hasPactl) {
+        return await getLinuxAudioDevices();
+      }
+    } catch (error) {
+      console.error('Error getting Linux audio devices:', error);
+    }
+  }
+  
+  // Fallback to mock devices
   const mockDevices = [
     { id: 'default-speaker', name: 'Default Speaker', type: 'audiooutput' },
     { id: 'default-mic', name: 'Default Microphone', type: 'audioinput' },
@@ -108,15 +143,64 @@ ipcMain.handle('get-audio-devices', async () => {
     );
   }
   
-  // Note: In a real implementation, you would use a native module or API to get the actual devices
   return mockDevices;
+});
+
+// Get Linux audio devices using pactl
+async function getLinuxAudioDevices() {
+  return new Promise((resolve, reject) => {
+    exec('pactl list sinks short && pactl list sources short', (error, stdout) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      
+      const lines = stdout.split('\n');
+      const devices = [];
+      
+      lines.forEach(line => {
+        if (!line.trim()) return;
+        
+        const parts = line.split('\t');
+        if (parts.length >= 2) {
+          const id = parts[0];
+          const name = parts[1];
+          
+          if (line.includes('list sinks')) {
+            devices.push({ id, name, type: 'audiooutput' });
+          } else {
+            devices.push({ id, name, type: 'audioinput' });
+          }
+        }
+      });
+      
+      resolve(devices);
+    });
+  });
+}
+
+// Check for TTS backends
+ipcMain.handle('get-tts-backends', async () => {
+  const backends = [
+    { id: 'openai', name: 'OpenAI TTS', available: true }
+  ];
+  
+  // Check for eSpeak
+  const hasEspeak = await isCommandAvailable('espeak-ng');
+  backends.push({ 
+    id: 'espeak', 
+    name: 'eSpeak NG', 
+    available: hasEspeak 
+  });
+
+  return backends;
 });
 
 // Create a virtual microphone device
 ipcMain.handle('create-virtual-microphone', async () => {
   try {
     if (process.platform === 'linux') {
-      // For Linux, use PulseAudio to create a virtual device
+      // For Linux, use PulseAudio (pactl) to create a virtual device
       return createLinuxVirtualMic();
     } else if (process.platform === 'win32') {
       // For Windows, use VB-Cable or similar
@@ -136,24 +220,76 @@ ipcMain.handle('create-virtual-microphone', async () => {
   }
 });
 
-// Create a virtual microphone on Linux
+// Create a virtual microphone on Linux using pactl
 function createLinuxVirtualMic() {
-  return new Promise((resolve) => {
-    // In a production app, you would use pactl or JACK to create a virtual device
+  return new Promise((resolve, reject) => {
     console.log('Creating virtual mic on Linux with PulseAudio...');
     
-    // This is simplified - in production you would execute real commands:
-    // For example: pactl load-module module-null-sink sink_name=VirtualMic sink_properties=device.description=VirtualMic
-    
-    setTimeout(() => {
-      // Simulate success
-      resolve({
-        success: true,
-        deviceId: 'virtual-mic-linux',
-        name: 'Virtual Microphone (PulseAudio)'
-      });
-    }, 1000);
+    // Check if pactl is available
+    exec('which pactl', async (error) => {
+      if (error) {
+        resolve({
+          success: false,
+          error: 'pactl not found. Please install PulseAudio.'
+        });
+        return;
+      }
+      
+      try {
+        // Create a null sink
+        const sinkResult = await runCommand('pactl load-module module-null-sink sink_name=VirtualSpeaker sink_properties=device.description="Virtual Speaker"');
+        activePactlModules.push(sinkResult.trim());
+        
+        // Create a virtual source
+        const sourceResult = await runCommand('pactl load-module module-virtual-source source_name=VirtualMic source_properties=device.description="Virtual Microphone"');
+        activePactlModules.push(sourceResult.trim());
+        
+        // Create a loopback from the sink to the source
+        const loopbackResult = await runCommand('pactl load-module module-loopback source=VirtualSpeaker.monitor sink=VirtualMic');
+        activePactlModules.push(loopbackResult.trim());
+        
+        resolve({
+          success: true,
+          deviceId: 'VirtualMic',
+          name: 'Virtual Microphone (PulseAudio)'
+        });
+      } catch (err) {
+        console.error('Error creating PulseAudio virtual devices:', err);
+        unloadPactlModules();
+        resolve({
+          success: false,
+          error: `Failed to create PulseAudio virtual devices: ${err.message}`
+        });
+      }
+    });
   });
+}
+
+// Helper to run a command and get its output
+function runCommand(command) {
+  return new Promise((resolve, reject) => {
+    exec(command, (error, stdout) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+}
+
+// Unload PulseAudio modules
+function unloadPactlModules() {
+  if (activePactlModules.length > 0) {
+    activePactlModules.forEach(moduleId => {
+      try {
+        exec(`pactl unload-module ${moduleId}`);
+      } catch (err) {
+        console.error(`Error unloading module ${moduleId}:`, err);
+      }
+    });
+    activePactlModules = [];
+  }
 }
 
 // Create a virtual microphone on Windows
@@ -204,23 +340,39 @@ function routeAudioToMicrophone(deviceId) {
   return new Promise((resolve) => {
     console.log(`Routing audio to microphone: ${deviceId}`);
     
-    // In a real implementation, you would use platform-specific APIs
-    // This is a simplified mock implementation
-    
-    // For Linux, you might use PulseAudio to route audio
+    // For Linux, use PulseAudio to route audio
     if (process.platform === 'linux') {
-      // Example: You'd run pactl commands here
-      // activeAudioProcess = spawn('pactl', [...]);
+      // In a real implementation, we'd need to create loopback modules
+      // or adjust the existing modules to route to the selected device
+      
+      if (deviceId === 'VirtualMic') {
+        // Our virtual mic is already set up with the loopback
+        resolve({ success: true });
+        return;
+      }
+      
+      // For other mics, we'd need to adjust the routing
+      exec(`pactl list short sources | grep ${deviceId}`, (error) => {
+        if (error) {
+          resolve({ 
+            success: false, 
+            error: `Microphone ${deviceId} not found`
+          });
+          return;
+        }
+        
+        // In a full implementation, we'd set up the routing here
+        resolve({ success: true });
+      });
     } 
     // For Windows, you'd use the Windows audio API or third-party tools
     else if (process.platform === 'win32') {
       // Example: You might execute a utility here
       // activeAudioProcess = spawn('some-windows-tool', [...]);
-    }
-    
-    setTimeout(() => {
       resolve({ success: true });
-    }, 500);
+    } else {
+      resolve({ success: true });
+    }
   });
 }
 
@@ -251,20 +403,87 @@ function cleanupAudioRouting() {
       activeAudioProcess = null;
     }
     
-    // Additional platform-specific cleanup
-    if (process.platform === 'linux') {
-      // Example: You might need to run additional cleanup commands
-      // exec('pactl unload-module module-loopback', ...);
-    } else if (process.platform === 'win32') {
-      // Windows-specific cleanup
-    }
-    
     resolve();
   });
 }
 
-// Handle saving audio (from original code)
+// Handle saving audio
 ipcMain.handle('save-audio', async (event, audioBuffer) => {
   // Here you could add functionality to save the audio to a file if needed
   return { success: true };
+});
+
+// Generate speech using eSpeak
+ipcMain.handle('generate-espeak', async (event, options) => {
+  const { text, voice, outputPath } = options;
+  const tempWavPath = path.join(os.tmpdir(), `espeak-output-${Date.now()}.wav`);
+  
+  return new Promise((resolve, reject) => {
+    // Check if espeak-ng is available
+    exec('which espeak-ng', (error) => {
+      if (error) {
+        resolve({
+          success: false,
+          error: 'eSpeak NG not found. Please install it first.'
+        });
+        return;
+      }
+      
+      // Run espeak-ng to generate speech
+      const espeakProcess = spawn('espeak-ng', [
+        '-v', voice || 'en',
+        '-w', tempWavPath,
+        text
+      ]);
+      
+      espeakProcess.on('close', (code) => {
+        if (code !== 0) {
+          resolve({
+            success: false,
+            error: `eSpeak process exited with code ${code}`
+          });
+          return;
+        }
+        
+        // Read the generated audio file
+        fs.readFile(tempWavPath, (err, data) => {
+          if (err) {
+            resolve({
+              success: false,
+              error: `Failed to read eSpeak output: ${err.message}`
+            });
+            return;
+          }
+          
+          // Clean up temp file
+          fs.unlink(tempWavPath, () => {});
+          
+          resolve({
+            success: true,
+            audioData: data.toString('base64')
+          });
+        });
+      });
+      
+      espeakProcess.on('error', (err) => {
+        resolve({
+          success: false,
+          error: `Failed to start eSpeak: ${err.message}`
+        });
+      });
+    });
+  });
+});
+
+// Window control functions
+ipcMain.handle('minimize-window', () => {
+  if (mainWindow) {
+    mainWindow.minimize();
+  }
+});
+
+ipcMain.handle('close-window', () => {
+  if (mainWindow) {
+    mainWindow.close();
+  }
 }); 

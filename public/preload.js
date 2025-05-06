@@ -6,5 +6,9 @@ contextBridge.exposeInMainWorld('electron', {
   getAudioDevices: () => ipcRenderer.invoke('get-audio-devices'),
   createVirtualMicrophone: () => ipcRenderer.invoke('create-virtual-microphone'),
   startAudioRouting: (options) => ipcRenderer.invoke('start-audio-routing', options),
-  stopAudioRouting: () => ipcRenderer.invoke('stop-audio-routing')
+  stopAudioRouting: () => ipcRenderer.invoke('stop-audio-routing'),
+  getTtsBackends: () => ipcRenderer.invoke('get-tts-backends'),
+  generateEspeak: (options) => ipcRenderer.invoke('generate-espeak', options),
+  minimizeWindow: () => ipcRenderer.invoke('minimize-window'),
+  closeWindow: () => ipcRenderer.invoke('close-window')
 }); 
