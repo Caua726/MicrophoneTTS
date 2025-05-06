@@ -11,7 +11,7 @@ interface ElectronAPI {
 
 // Safely access the electron API with checks for availability
 const getElectronAPI = (): ElectronAPI | undefined => {
-  if (window.electron) {
+  if (typeof window !== 'undefined' && window.electron) {
     return window.electron as ElectronAPI;
   }
   return undefined;
@@ -40,26 +40,40 @@ const AudioOutput: React.FC<AudioOutputProps> = ({ isActive, setIsActive }) => {
   // Detect OS
   const [platform, setPlatform] = useState<string>('unknown');
 
+  // Check for electron API availability
   useEffect(() => {
-    // Check if electron API is available
-    const electronAPI = getElectronAPI();
-    if (electronAPI) {
-      setElectronAvailable(true);
-      
-      // Detect platform through Electron
-      electronAPI.platform().then((plat: string) => {
-        setPlatform(plat);
-      }).catch(err => {
-        console.error('Error getting platform:', err);
-        setPlatform('unknown');
-      });
+    // Use a try-catch to handle any potential errors when accessing window.electron
+    try {
+      const electronAPI = getElectronAPI();
+      if (electronAPI) {
+        console.log('Electron API is available');
+        setElectronAvailable(true);
+        
+        // Detect platform through Electron
+        electronAPI.platform()
+          .then((plat: string) => {
+            console.log('Platform detected:', plat);
+            setPlatform(plat);
+          })
+          .catch(err => {
+            console.error('Error getting platform:', err);
+            setPlatform('unknown');
+          });
 
-      // Fetch available audio devices
-      loadAudioDevices();
-    } else {
-      console.warn('Electron API not available. Running in development/browser mode.');
+        // Fetch available audio devices
+        loadAudioDevices();
+      } else {
+        console.warn('Electron API not available. Running in development/browser mode.');
+        setElectronAvailable(false);
+        // Add some mock devices for development
+        setAudioDevices([
+          { id: 'mock-speaker', name: 'Mock Speaker', type: 'audiooutput' },
+          { id: 'mock-mic', name: 'Mock Microphone', type: 'audioinput' }
+        ]);
+      }
+    } catch (err) {
+      console.error('Error accessing Electron API:', err);
       setElectronAvailable(false);
-      // Add some mock devices for development
       setAudioDevices([
         { id: 'mock-speaker', name: 'Mock Speaker', type: 'audiooutput' },
         { id: 'mock-mic', name: 'Mock Microphone', type: 'audioinput' }
@@ -68,32 +82,32 @@ const AudioOutput: React.FC<AudioOutputProps> = ({ isActive, setIsActive }) => {
   }, []);
 
   const loadAudioDevices = async () => {
-    const electronAPI = getElectronAPI();
-    if (!electronAPI) {
-      setError('Electron API not available.');
-      return;
-    }
-
     try {
+      const electronAPI = getElectronAPI();
+      if (!electronAPI) {
+        console.warn('Electron API not available when loading audio devices');
+        return;
+      }
+
       setLoading(true);
       const devices = await electronAPI.getAudioDevices();
       setAudioDevices(devices);
-      setLoading(false);
     } catch (err) {
       console.error('Error getting audio devices:', err);
       setError('Failed to get audio devices.');
+    } finally {
       setLoading(false);
     }
   };
 
   const createVirtualMicrophone = async () => {
-    const electronAPI = getElectronAPI();
-    if (!electronAPI) {
-      setError('Electron API not available.');
-      return;
-    }
-
     try {
+      const electronAPI = getElectronAPI();
+      if (!electronAPI) {
+        setError('Electron API not available.');
+        return;
+      }
+
       setLoading(true);
       setError(null);
       
@@ -109,30 +123,29 @@ const AudioOutput: React.FC<AudioOutputProps> = ({ isActive, setIsActive }) => {
       } else {
         setError(result.error || 'Failed to create virtual microphone.');
       }
-      
-      setLoading(false);
     } catch (err) {
       console.error('Error creating virtual microphone:', err);
       setError('Error creating virtual microphone. This may require special system permissions.');
+    } finally {
       setLoading(false);
     }
   };
 
   const toggleAudioOutput = async () => {
-    const electronAPI = getElectronAPI();
-    
+    // For dev mode or when electron is not available
     if (!electronAvailable) {
       // In development mode, just toggle the state
       setIsActive(!isActive);
       return;
     }
     
-    if (!electronAPI) {
-      setError('Electron API not available.');
-      return;
-    }
-
     try {
+      const electronAPI = getElectronAPI();
+      if (!electronAPI) {
+        setError('Electron API not available.');
+        return;
+      }
+
       if (isActive) {
         // Stop routing audio
         await electronAPI.stopAudioRouting();

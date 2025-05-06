@@ -9,28 +9,34 @@ let mainWindow;
 let activeAudioProcess = null;
 
 function createWindow() {
+  // Create the browser window.
   mainWindow = new BrowserWindow({
     width: 900,
     height: 680,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      enableRemoteModule: false,
       preload: path.join(__dirname, 'preload.js')
     }
   });
 
-  // Set Content Security Policy
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        'Content-Security-Policy': [
-          "default-src 'self'; script-src 'self'; connect-src 'self' https://api.openai.com; style-src 'self' 'unsafe-inline';"
-        ]
-      }
+  // Set Content Security Policy - but only in production
+  // In development, we need to allow eval for React hot reloading
+  if (!isDev) {
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Content-Security-Policy': [
+            "default-src 'self'; script-src 'self'; connect-src 'self' https://api.openai.com; style-src 'self' 'unsafe-inline';"
+          ]
+        }
+      });
     });
-  });
+  }
 
+  // Load app
   const startUrl = isDev 
     ? 'http://localhost:3000'
     : url.format({
@@ -41,6 +47,7 @@ function createWindow() {
 
   mainWindow.loadURL(startUrl);
 
+  // Open DevTools in development mode
   if (isDev) {
     mainWindow.webContents.openDevTools();
   }
