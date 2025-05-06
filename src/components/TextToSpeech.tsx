@@ -6,8 +6,13 @@ interface ElectronAPI {
   saveAudio: (audioBuffer: any) => Promise<{success: boolean}>;
 }
 
-// Access the electron API with type assertion when needed
-const electronAPI = window.electron as ElectronAPI;
+// Safely access the electron API with checks for availability
+const getElectronAPI = (): ElectronAPI | undefined => {
+  if (window.electron) {
+    return window.electron as ElectronAPI;
+  }
+  return undefined;
+};
 
 interface TextToSpeechProps {
   apiKey: string;
@@ -79,6 +84,19 @@ const TextToSpeech: React.FC<TextToSpeechProps> = ({ apiKey, isOutputActive }) =
         audioRef.current.src = audioUrlRef.current;
         // Play automatically after generation
         playAudio();
+      }
+
+      // Optionally save the audio using the Electron API if available
+      const electronAPI = getElectronAPI();
+      if (electronAPI) {
+        try {
+          // Create an ArrayBuffer from the Blob to send to Electron
+          const arrayBuffer = await audioBlob.arrayBuffer();
+          await electronAPI.saveAudio(arrayBuffer);
+        } catch (err) {
+          console.warn('Could not save audio through Electron:', err);
+          // Non-critical error, no need to show to user
+        }
       }
     } catch (err) {
       console.error('Speech generation error:', err);

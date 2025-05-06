@@ -9,8 +9,13 @@ interface ElectronAPI {
   stopAudioRouting: () => Promise<{success: boolean, error?: string}>;
 }
 
-// Use this to access the electron API with type assertion
-const electronAPI = window.electron as ElectronAPI;
+// Safely access the electron API with checks for availability
+const getElectronAPI = (): ElectronAPI | undefined => {
+  if (window.electron) {
+    return window.electron as ElectronAPI;
+  }
+  return undefined;
+};
 
 interface AudioOutputProps {
   isActive: boolean;
@@ -30,24 +35,47 @@ const AudioOutput: React.FC<AudioOutputProps> = ({ isActive, setIsActive }) => {
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('default');
   const [outputType, setOutputType] = useState<'microphone' | 'speaker'>('microphone');
   const [virtualMicCreated, setVirtualMicCreated] = useState<boolean>(false);
+  const [electronAvailable, setElectronAvailable] = useState<boolean>(false);
 
   // Detect OS
-  const [platform, setPlatform] = useState<string>('');
+  const [platform, setPlatform] = useState<string>('unknown');
 
   useEffect(() => {
-    // Detect platform through Electron
-    electronAPI.platform().then((plat: string) => {
-      setPlatform(plat);
-    });
+    // Check if electron API is available
+    const electronAPI = getElectronAPI();
+    if (electronAPI) {
+      setElectronAvailable(true);
+      
+      // Detect platform through Electron
+      electronAPI.platform().then((plat: string) => {
+        setPlatform(plat);
+      }).catch(err => {
+        console.error('Error getting platform:', err);
+        setPlatform('unknown');
+      });
 
-    // Fetch available audio devices
-    loadAudioDevices();
+      // Fetch available audio devices
+      loadAudioDevices();
+    } else {
+      console.warn('Electron API not available. Running in development/browser mode.');
+      setElectronAvailable(false);
+      // Add some mock devices for development
+      setAudioDevices([
+        { id: 'mock-speaker', name: 'Mock Speaker', type: 'audiooutput' },
+        { id: 'mock-mic', name: 'Mock Microphone', type: 'audioinput' }
+      ]);
+    }
   }, []);
 
   const loadAudioDevices = async () => {
+    const electronAPI = getElectronAPI();
+    if (!electronAPI) {
+      setError('Electron API not available.');
+      return;
+    }
+
     try {
       setLoading(true);
-      // In a real implementation, we would use Electron's ipcRenderer to get system devices
       const devices = await electronAPI.getAudioDevices();
       setAudioDevices(devices);
       setLoading(false);
@@ -59,18 +87,22 @@ const AudioOutput: React.FC<AudioOutputProps> = ({ isActive, setIsActive }) => {
   };
 
   const createVirtualMicrophone = async () => {
+    const electronAPI = getElectronAPI();
+    if (!electronAPI) {
+      setError('Electron API not available.');
+      return;
+    }
+
     try {
       setLoading(true);
       setError(null);
       
-      // Call platform-specific method to create virtual microphone
       const result = await electronAPI.createVirtualMicrophone();
       
       if (result.success) {
         setVirtualMicCreated(true);
         await loadAudioDevices(); // Reload devices to include the new one
         
-        // Select the newly created virtual microphone
         if (result.deviceId) {
           setSelectedDeviceId(result.deviceId);
         }
@@ -87,6 +119,19 @@ const AudioOutput: React.FC<AudioOutputProps> = ({ isActive, setIsActive }) => {
   };
 
   const toggleAudioOutput = async () => {
+    const electronAPI = getElectronAPI();
+    
+    if (!electronAvailable) {
+      // In development mode, just toggle the state
+      setIsActive(!isActive);
+      return;
+    }
+    
+    if (!electronAPI) {
+      setError('Electron API not available.');
+      return;
+    }
+
     try {
       if (isActive) {
         // Stop routing audio
@@ -115,6 +160,9 @@ const AudioOutput: React.FC<AudioOutputProps> = ({ isActive, setIsActive }) => {
     <div className="voice-controls">
       <h2>Audio Output Configuration</h2>
       {error && <p className="error">{error}</p>}
+      {!electronAvailable && (
+        <p className="warning">Running in development mode. Electron features are simulated.</p>
+      )}
       
       <div className="device-selection">
         <div className="output-type-selector">
@@ -161,7 +209,7 @@ const AudioOutput: React.FC<AudioOutputProps> = ({ isActive, setIsActive }) => {
             
             <button 
               onClick={createVirtualMicrophone}
-              disabled={isActive || loading || virtualMicCreated}
+              disabled={isActive || loading || virtualMicCreated || !electronAvailable}
               className="secondary-button"
             >
               {loading ? 'Creating...' : 'Create Virtual Microphone'}
@@ -171,7 +219,7 @@ const AudioOutput: React.FC<AudioOutputProps> = ({ isActive, setIsActive }) => {
               <p className="success-message">Virtual microphone created successfully!</p>
             )}
             
-            {platform && (
+            {platform && platform !== 'unknown' && (
               <p className="platform-info">
                 Detected platform: {platform}
                 {platform === 'linux' ? ' (using PulseAudio)' : 

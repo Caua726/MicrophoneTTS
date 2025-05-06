@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, session } = require('electron');
 const path = require('path');
 const url = require('url');
 const { spawn, exec } = require('child_process');
@@ -13,10 +13,22 @@ function createWindow() {
     width: 900,
     height: 680,
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
+      nodeIntegration: false,
+      contextIsolation: true,
       preload: path.join(__dirname, 'preload.js')
     }
+  });
+
+  // Set Content Security Policy
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          "default-src 'self'; script-src 'self'; connect-src 'self' https://api.openai.com; style-src 'self' 'unsafe-inline';"
+        ]
+      }
+    });
   });
 
   const startUrl = isDev 
